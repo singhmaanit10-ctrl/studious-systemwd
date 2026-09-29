@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>India Airfare Price Index – SIH26056 Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f6f7f9;--card:#fff;--tx:#1a2130;--mu:#6b7385;--bd:#e2e5ec;--ac:#1f5fd6;--c1:#1f5fd6;--c2:#d9822b;--c3:#2a9d6f}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f131b;--card:#181e2a;--tx:#e8ebf2;--mu:#98a1b5;--bd:#2a3244;--ac:#6b9bff;--c1:#6b9bff;--c2:#f0a25a;--c3:#4fc596}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;padding:16px;max-width:1100px;margin:auto}
+h1{font-size:20px;margin:0}p.s{color:var(--mu);margin:2px 0 14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.k{font-size:12px;color:var(--mu)}.v{font-size:24px;font-weight:600}.up{color:#d64545}.dn{color:var(--c3)}
+button{background:var(--card);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer}
+button.on,button.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:520px}th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--bd)}th:first-child,td:first-child{text-align:left}th{color:var(--mu);font-weight:500}
+svg{width:100%;height:auto;display:block}#log{font:12px ui-monospace,monospace;color:var(--mu);max-height:110px;overflow:auto;white-space:pre-wrap}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:760px){.g{grid-template-columns:1fr}}
+</style></head><body>
+<h1>India Airfare Price Index</h1>
+<p class="s">SIH26056 · MoSPI CPI augmentation prototype · simulated scrape data (Jevons chained index, base day = 100)</p>
+<div class="card row"><b>Booking window:</b>
+<button data-w="0">0–3 days</button><button data-w="1">7–14 days</button><button data-w="2">30+ days</button><button data-w="3" class="on">All (weighted)</button>
+<span style="flex:1"></span><button class="p" id="scrape">▶ Run scrape cycle</button><button id="csv">⬇ Export CSV</button></div>
+<div class="grid" id="kpi"></div>
+<div class="card"><div class="k">Airfare index by advance-booking window</div><svg id="ch" viewBox="0 0 800 260"></svg>
+<div class="row k" id="lg"></div></div>
+<div class="g"><div class="card tw"><div class="k">Route indices (selected window)</div><table id="rt"></table></div>
+<div class="card tw"><div class="k">Source price deviation (last 7 days, vs route-day mean)</div><table id="ot"></table>
+<div class="k" style="margin-top:10px">Pipeline stats (latest cycle)</div><div id="ps" class="k"></div></div></div>
+<div class="card"><div class="k">Scraper / pipeline log</div><div id="log"></div></div>
+<script>
+const R=[["DEL-BOM",5400,10],["BLR-DEL",5600,9],["BOM-BLR",4200,7],["DEL-CCU",4900,6],["HYD-DEL",4700,5],["MAA-DEL",5600,4],["BOM-GOI",3300,3],["DEL-GAU",6200,2],["DEL-IXA",8300,1],["BLR-HYD",3100,3]];
+const SRC=[["MakeMyTrip",.02,120],["EaseMyTrip",-.01,90],["Yatra",.03,150],["Airline site",-.02,0]],W=["0–3 d","7–14 d","30+ d"],WF=[1.28,1,.82],WV=[.16,.09,.05];
+const tw=R.reduce((a,r)=>a+r[2],0),wt=R.map(r=>r[2]/tw);
+let seed=42;const rnd=()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const gauss=()=>Math.sqrt(-2*Math.log(rnd()+1e-9))*Math.cos(6.283*rnd());
+let raw=[],D=0,stats={};
+function scrapeDay(d){let n=0,bad=0;
+ for(let ri=0;ri<R.length;ri++)for(let w=0;w<3;w++){
+  const base=R[ri][1]*(1+.1*Math.sin(d/9+ri))*(d>45?1+.004*(d-45):1)*(1+.0015*d);
+  for(const [s,b,fee] of SRC)for(let k=0;k<4;k++){
+   let fare=base*WF[w]*(1+b)*(1+WV[w]*gauss()*.6);let o=0;
+   if(rnd()<.04){fare*=rnd()<.5?3.2:.25;o=1;bad++}
+   raw.push({d,ri,w,s:SRC.findIndex(x=>x[0]==s),total:Math.round(fare+fee),fee});n++}}
+ return {n,bad}}
+const log=t=>{const l=document.getElementById('log');l.textContent+=`[day ${D}] ${t}\n`;l.scrollTop=1e9};
+function clean(rows){ // strip fees -> baseline fare, IQR filter
+ const f=rows.map(r=>r.total-r.fee).sort((a,b)=>a-b),q=p=>f[Math.floor(p*(f.length-1))],q1=q(.25),q3=q(.75),i=q3-q1;
+ return rows.filter(r=>{const x=r.total-r.fee;return x>=q1-1.5*i&&x<=q3+1.5*i}).map(r=>({...r,base:r.total-r.fee}))}
+let cache={};
+function compute(){ // route/window/day geometric mean fare -> Jevons relatives
+ const G={},all=[];let kept=0,tot=0;
+ for(let d=0;d<=D;d++)for(let ri=0;ri<R.length;ri++)for(let w=0;w<3;w++){
+  const rows=raw.filter(r=>r.d==d&&r.ri==ri&&r.w==w),c=clean(rows);tot+=rows.length;kept+=c.length;
+  const gm=Math.exp(c.reduce((a,r)=>a+Math.log(r.base),0)/c.length);G[[d,ri,w]]=gm;
+  c.forEach(r=>all.push({...r,gm}))}
+ cache={G,all};stats={tot,kept}}
+function rel(ri,w,d){return G_(d,ri,w)/G_(0,ri,w)}const G_=(d,ri,w)=>cache.G[[d,ri,w]];
+function idx(w,d,ri=null){ // chained Jevons across routes with capacity weights
+ if(ri!=null)return 100*(w==3?wt.map((_,j)=>0).length&&Math.exp([0,1,2].reduce((a,x)=>a+Math.log(rel(ri,x,d)),0)/3):rel(ri,w,d));
+ let s=0;const ws=w==3?[0,1,2]:[w];
+ for(let i=0;i<R.length;i++){let l=0;ws.forEach(x=>l+=Math.log(rel(i,x,d)));s+=wt[i]*l/ws.length}
+ return 100*Math.exp(s)}
+let W_=3;
+function render(){
+ const cols=['var(--c1)','var(--c2)','var(--c3)','var(--tx)'],lab=[...W,"All"];
+ const ser=[0,1,2,3].map(w=>Array.from({length:D+1},(_,d)=>idx(w,d)));
+ const all=ser.flat(),mn=Math.min(...all)-2,mx=Math.max(...all)+2,X=d=>40+d/Math.max(D,1)*750,Y=v=>235-(v-mn)/(mx-mn)*215;
+ let s='';for(let i=0;i<=4;i++){const v=mn+(mx-mn)*i/4;s+=`<line x1="40" x2="790" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--bd)"/><text x="34" y="${Y(v)+4}" font-size="10" text-anchor="end" fill="var(--mu)">${v.toFixed(0)}</text>`}
+ ser.forEach((a,i)=>s+=`<polyline fill="none" stroke="${cols[i]}" stroke-width="${i==W_?3:1.4}" opacity="${i==W_?1:.55}" ${i==3?'stroke-dasharray="5 3"':''} points="${a.map((v,d)=>X(d)+','+Y(v)).join(' ')}"/>`);
+ s+=`<text x="40" y="254" font-size="10" fill="var(--mu)">day 0</text><text x="790" y="254" font-size="10" text-anchor="end" fill="var(--mu)">day ${D}</text>`;
+ ch.innerHTML=s;lg.innerHTML=lab.map((l,i)=>`<span><b style="color:${cols[i]}">━</b> ${l}</span>`).join(' ');
+ const cur=ser[W_][D],p7=ser[W_][Math.max(0,D-7)],p30=ser[W_][Math.max(0,D-30)],all_=ser[3][D];
+ const ch_=(a,b)=>{const p=(a/b-1)*100;return `<span class="${p>0?'up':'dn'}">${p>=0?'+':''}${p.toFixed(2)}%</span>`};
+ kpi.innerHTML=[["Index ("+lab[W_]+")",cur.toFixed(2)],["7-day change",ch_(cur,p7)],["30-day change",ch_(cur,p30)],["CPI airfare headline",all_.toFixed(2)],["Listings kept / scraped",stats.kept+" / "+stats.tot]].map(x=>`<div class="card" style="margin:0"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+ rt.innerHTML='<tr><th>Route</th><th>Wt</th><th>Avg fare ₹</th><th>Index</th><th>7d</th></tr>'+R.map((r,i)=>{
+  const v=idx(W_,D,i),pv=idx(W_,Math.max(0,D-7),i),ws=W_==3?[0,1,2]:[W_];
+  const fare=ws.reduce((a,w)=>a+G_(D,i,w),0)/ws.length,h=Math.max(0,Math.min(1,(v-90)/40));
+  return `<tr><td>${r[0]}</td><td>${(wt[i]*100).toFixed(1)}%</td><td>${Math.round(fare).toLocaleString('en-IN')}</td><td style="background:rgba(214,69,69,${(h*.35).toFixed(2)})">${v.toFixed(1)}</td><td>${ch_(v,pv)}</td></tr>`}).join('');
+ const dev=SRC.map((s,si)=>{const x=cache.all.filter(r=>r.s==si&&r.d>D-7&&r.d<=D);return [s[0],x.reduce((a,r)=>a+r.base/r.gm-1,0)/x.length,x.length]});
+ ot.innerHTML='<tr><th>Source</th><th>Deviation</th><th>Listings</th></tr>'+dev.map(d=>`<tr><td>${d[0]}</td><td class="${d[1]>0?'up':'dn'}">${(d[1]*100).toFixed(2)}%</td><td>${d[2]}</td></tr>`).join('');
+ ps.textContent=`Outliers removed overall: ${stats.tot-stats.kept} (${((1-stats.kept/stats.tot)*100).toFixed(1)}%). Fees stripped: convenience fee ₹0–150 per OTA listing.`}
+function run(){compute();render()}
+function init(){for(D=0;D<60;D++)scrapeDay(D);D=59;log("Backfilled 60 days of synthetic history (10 routes × 3 windows × 4 sources × 4 listings)");run()}
+scrape.onclick=()=>{D++;const r=scrapeDay(D);log(`scrape cycle: ${r.n} listings fetched, ${r.bad} injected anomalies -> cleaning (fee strip + IQR) -> Jevons update`);run()};
+document.querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-w]').forEach(x=>x.classList.remove('on'));b.classList.add('on');W_=+b.dataset.w;render()});
+csv.onclick=()=>{let t="day,route,window,geo_mean_base_fare,index\n";for(let d=0;d<=D;d++)R.forEach((r,i)=>[0,1,2].forEach(w=>t+=`${d},${r[0]},${W[w]},${G_(d,i,w).toFixed(2)},${(rel(i,w,d)*100).toFixed(2)}\n`));
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download='airfare_index.csv';a.click()};
+init();
+</script></body></html>
